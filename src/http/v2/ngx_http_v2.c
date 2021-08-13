@@ -1400,14 +1400,13 @@ ngx_http_v2_state_headers(ngx_http_v2_connection_t *h2c, u_char *pos,
     // reuses of the same connection. Akamai's whitepaper had examples of
     // clients connecting with multiple priority frames which I think means
     // they collect priority frames over time
-
-    // if (!h2c->fp->fingerprinted) {
-    ngx_http_v2_fingerprint_priority_t* fp_priority = ngx_list_push(h2c->fp->priorities);
-    fp_priority->stream_id = stream->node->id;
-    fp_priority->exclusivity = excl;
-    fp_priority->dependent_stream_id = depend;
-    fp_priority->weight = weight;
-    // }
+    if (!h2c->fp->fingerprinted) {
+        ngx_http_v2_fingerprint_priority_t* fp_priority = ngx_list_push(h2c->fp->priorities);
+        fp_priority->stream_id = stream->node->id;
+        fp_priority->exclusivity = excl;
+        fp_priority->dependent_stream_id = depend;
+        fp_priority->weight = weight;
+    }
 
     return ngx_http_v2_state_header_block(h2c, pos, end);
 
