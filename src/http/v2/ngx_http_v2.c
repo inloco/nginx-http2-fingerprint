@@ -51,6 +51,7 @@ typedef struct {
 #define NGX_HTTP_V2_MAX_STREAMS_SETTING          0x3
 #define NGX_HTTP_V2_INIT_WINDOW_SIZE_SETTING     0x4
 #define NGX_HTTP_V2_MAX_FRAME_SIZE_SETTING       0x5
+#define NGX_HTTP_V2_MAX_HEADER_LIST_SIZE         0x6
 
 #define NGX_HTTP_V2_FRAME_BUFFER_SIZE            24
 
@@ -296,6 +297,7 @@ ngx_http_v2_init(ngx_event_t *rev)
 
     h2c->streams_index = ngx_pcalloc(c->pool, ngx_http_v2_index_size(h2scf)
                                               * sizeof(ngx_http_v2_node_t *));
+
     if (h2c->streams_index == NULL) {
         ngx_http_close_connection(c);
         return;
@@ -334,6 +336,20 @@ ngx_http_v2_init(ngx_event_t *rev)
 
     c->idle = 1;
     ngx_reusable_connection(c, 0);
+
+    h2c->fp = ngx_palloc(c->pool, sizeof(ngx_http_v2_fingerprint_t));
+    // This is probably not something worth closing the connection over
+    if (h2c->fp == NULL) {
+        ngx_http_close_connection(c);
+        return;
+    }
+    // connections are reused and this needs to be toggled to prevent duplicate parsing
+    h2c->fp->fingerprinted = 0;
+    h2c->fp->settings = ngx_list_create(c->pool, 1, sizeof(ngx_http_v2_setting_t));
+    // there's usually at least one priority frame
+    h2c->fp->priorities = ngx_list_create(c->pool, 1, sizeof(ngx_http_v2_fingerprint_priority_t));
+    // Any legitimate request will have 3-4 headers
+    h2c->fp->pseudo_headers = ngx_list_create(c->pool, 1, sizeof(ngx_str_t));
 
     ngx_http_v2_read_handler(rev);
 }
@@ -1380,6 +1396,18 @@ ngx_http_v2_state_headers(ngx_http_v2_connection_t *h2c, u_char *pos,
                                                 NGX_HTTP_V2_INTERNAL_ERROR);
         }
     }
+    // not sure if priority frames should be getting accumulated across
+    // reuses of the same connection. Akamai's whitepaper had examples of
+    // clients connecting with multiple priority frames which I think means
+    // they collect priority frames over time
+
+    // if (!h2c->fp->fingerprinted) {
+    ngx_http_v2_fingerprint_priority_t* fp_priority = ngx_list_push(h2c->fp->priorities);
+    fp_priority->stream_id = stream->node->id;
+    fp_priority->exclusivity = excl;
+    fp_priority->dependent_stream_id = depend;
+    fp_priority->weight = weight;
+    // }
 
     return ngx_http_v2_state_header_block(h2c, pos, end);
 
@@ -1810,6 +1838,11 @@ ngx_http_v2_state_process_header(ngx_http_v2_connection_t *h2c, u_char *pos,
                            "http2 header: \":%V: %V\"",
                            &header->name, &header->value);
 
+            if (!h2c->fp->fingerprinted) {
+                ngx_str_t* header_name = ngx_list_push(h2c->fp->pseudo_headers);
+                header_name->data = header->name.data;
+                header_name->len = header->name.len;
+            }
             return ngx_http_v2_state_header_complete(h2c, pos, end);
         }
 
@@ -2226,6 +2259,10 @@ ngx_http_v2_state_settings_params(ngx_http_v2_connection_t *h2c, u_char *pos,
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, h2c->connection->log, 0,
                        "http2 setting %ui:%ui", id, value);
 
+        ngx_http_v2_setting_t* setting = ngx_list_push(h2c->fp->settings);
+        setting->name = id;
+        setting->value = value;
+
         switch (id) {
 
         case NGX_HTTP_V2_INIT_WINDOW_SIZE_SETTING:
@@ -2542,6 +2579,7 @@ ngx_http_v2_state_window_update(ngx_http_v2_connection_t *h2c, u_char *pos,
         }
     }
 
+    h2c->fp->window_update = window;
     return ngx_http_v2_state_complete(h2c, pos, end);
 }
 
