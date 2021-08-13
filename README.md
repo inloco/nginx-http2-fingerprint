@@ -17,7 +17,7 @@ http {
             # Proxy the request to the origin
             proxy_pass http://localhost:8000;
         }
-  	}
+    }
 }
 ```
 
