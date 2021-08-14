@@ -13,7 +13,7 @@ http {
 
         location / {
             # Add the fingerprint string to the forwarded headers
-            add_header X-Http-Fingerprint $http2_fingerprint;
+            proxy_set_header X-Http-Fingerprint $http2_fingerprint;
             # Proxy the request to the origin
             proxy_pass http://localhost:8000;
         }
